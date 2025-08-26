@@ -149,36 +149,39 @@ router.get('/', async (req, res) => {
                             });
                             console.log("📄 Session file sent successfully to", userJid);
                             
-                            // Send session success message
-                            await Septorch.sendMessage(userJid, {
-                                text: `*SESSION GENERATED SUCCESSFULY* ✅
-
-*🌟 Join the official channel for more courage, updates, and support!* 🌟
-https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
-
-*Ask me any question Here*  
-ngl.link/septorch
-
-📸 Instagram: instagram.com/septorch29  
-🎵 TikTok: tiktok.com/@septorch
-
-I will answer your question on the channel  
-https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
-
-*SEPTORCH--WHATTSAPP-BOT*`
+                            // Send video thumbnail with caption
+                            await sock.sendMessage(userJid, {
+                                image: { url: 'https://img.youtube.com/vi/-oz_u1iMgf8/maxresdefault.jpg' },
+                                caption: `🎬 *KnightBot MD V2.0 Full Setup Guide!*\n\n🚀 Bug Fixes + New Commands + Fast AI Chat\n📺 Watch Now: https://youtu.be/-oz_u1iMgf8`
                             });
-
-                            // Clean up session after successful connection and sending files
-                            setTimeout(() => {
-                                console.log('🧹 Cleaning up session...');
-                                const deleted = removeFile(dirs);
-                                if (deleted) {
-                                    console.log('✅ Session cleaned up successfully');
-                                } else {
-                                    console.log('❌ Failed to clean up session folder');
-                                }
-                            }, 15000); // Wait 15 seconds before cleanup to ensure messages are sent
-                        } // 🔥 Added this closing brace!
+                            console.log("🎬 Video guide sent successfully");
+                            
+                            // Send warning message
+                            await sock.sendMessage(userJid, {
+                                text: `⚠️Do not share this file with anybody⚠️\n 
+┌┤✑  Thanks for using Knight Bot
+│└────────────┈ ⳹        
+│©2024 Mr Unique Hacker 
+└─────────────────┈ ⳹\n\n`
+                            });
+                        } else {
+                            console.log("❌ Could not determine user JID to send session file");
+                        }
+                    } catch (error) {
+                        console.error("Error sending session file:", error);
+                    }
+                    
+                    // Clean up session after successful connection and sending files
+                    setTimeout(() => {
+                        console.log('🧹 Cleaning up session...');
+                        const deleted = removeFile(dirs);
+                        if (deleted) {
+                            console.log('✅ Session cleaned up successfully');
+                        } else {
+                            console.log('❌ Failed to clean up session folder');
+                        }
+                    }, 15000); // Wait 15 seconds before cleanup to ensure messages are sent
+                }
 
                 if (connection === 'close') {
                     console.log('❌ Connection closed');
