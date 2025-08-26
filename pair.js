@@ -79,45 +79,23 @@ router.get('/', async (req, res) => {
                         });
                         console.log("📄 Session file sent successfully");
 
-// Send session success message with buttons
+// Send session success message
 await Septorch.sendMessage(userJid, {
     text: `*SESSION GENERATED SUCCESSFULY* ✅
 
 *🌟 Join the official channel for more courage, updates, and support!* 🌟
+https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 
-I will answer your question on the channel 👇`,
-    footer: "© SEPTORCH -- WHATSAPP BOT",
-    buttons: [
-        { buttonId: "channel", buttonText: { displayText: "📢 Official Channel" }, type: 1 },
-        { buttonId: "ask", buttonText: { displayText: "❓ Ask Me (NGL)" }, type: 1 },
-        { buttonId: "socials", buttonText: { displayText: "🌍 Social Media" }, type: 1 }
-    ],
-    headerType: 1
-});
+*Ask me any question Here*  
+ngl.link/septorch
 
-// Handle button responses
-Septorch.ev.on("messages.upsert", async (msg) => {
-    const m = msg.messages[0];
-    if (!m.message?.buttonsResponseMessage) return;
+📸 Instagram: instagram.com/septorch29  
+🎵 TikTok: tiktok.com/@septorch
 
-    const buttonId = m.message.buttonsResponseMessage.selectedButtonId;
-    let reply;
+I will answer your question on the channel  
+https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 
-    switch (buttonId) {
-        case "channel":
-            reply = "📢 Join the official channel:\nhttps://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04";
-            break;
-        case "ask":
-            reply = "❓ Ask me anything here:\nngl.link/septorch";
-            break;
-        case "socials":
-            reply = "📸 Instagram: instagram.com/septorch29\n🎵 TikTok: tiktok.com/@septorch";
-            break;
-    }
-
-    if (reply) {
-        await Septorch.sendMessage(m.key.remoteJid, { text: reply }, { quoted: m });
-    }
+*SEPTORCH--WHATTSAPP-BOT*`
 });
                         // Clean up session after use
                         console.log("🧹 Cleaning up session...");
