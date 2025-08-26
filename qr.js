@@ -150,8 +150,8 @@ router.get('/', async (req, res) => {
                             console.log("📄 Session file sent successfully to", userJid);
                             
                             // Send session success message
-await Septorch.sendMessage(userJid, {
-    text: `*SESSION GENERATED SUCCESSFULY* ✅
+                            await Septorch.sendMessage(userJid, {
+                                text: `*SESSION GENERATED SUCCESSFULY* ✅
 
 *🌟 Join the official channel for more courage, updates, and support!* 🌟
 https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
@@ -166,19 +166,19 @@ I will answer your question on the channel
 https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 
 *SEPTORCH--WHATTSAPP-BOT*`
-});
-                    
-                    // Clean up session after successful connection and sending files
-                    setTimeout(() => {
-                        console.log('🧹 Cleaning up session...');
-                        const deleted = removeFile(dirs);
-                        if (deleted) {
-                            console.log('✅ Session cleaned up successfully');
-                        } else {
-                            console.log('❌ Failed to clean up session folder');
-                        }
-                    }, 15000); // Wait 15 seconds before cleanup to ensure messages are sent
-                }
+                            });
+
+                            // Clean up session after successful connection and sending files
+                            setTimeout(() => {
+                                console.log('🧹 Cleaning up session...');
+                                const deleted = removeFile(dirs);
+                                if (deleted) {
+                                    console.log('✅ Session cleaned up successfully');
+                                } else {
+                                    console.log('❌ Failed to clean up session folder');
+                                }
+                            }, 15000); // Wait 15 seconds before cleanup to ensure messages are sent
+                        } // 🔥 Added this closing brace!
 
                 if (connection === 'close') {
                     console.log('❌ Connection closed');
