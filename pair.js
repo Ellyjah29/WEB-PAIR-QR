@@ -1,26 +1,20 @@
 import express from 'express';
 import fs from 'fs';
 import pino from 'pino';
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, jidNormalizedUser, fetchLatestBaileysVersion, delay } from '@whiskeysockets/baileys';
-import QRCode from 'qrcode';
-import qrcodeTerminal from 'qrcode-terminal';
-import { upload } from './mega.js';   // ✅ use same mega upload function
+import { 
+    makeWASocket, 
+    useMultiFileAuthState, 
+    makeCacheableSignalKeyStore, 
+    Browsers, 
+    fetchLatestBaileysVersion, 
+    delay 
+} from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
+import { upload } from './mega.js';
 
 const router = express.Router();
 
-// Helper to remove files
-function removeFile(FilePath) {
-    try {
-        if (!fs.existsSync(FilePath)) return false;
-        fs.rmSync(FilePath, { recursive: true, force: true });
-        return true;
-    } catch (e) {
-        console.error('Error removing file:', e);
-        return false;
-    }
-}
-
-// Random Mega ID generator (same as first code)
+// Random Mega ID generator
 function randomMegaId(length = 6, numberLength = 4) {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -50,90 +44,75 @@ https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 `;
 
 router.get('/', async (req, res) => {
-    const sessionId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-    const dirs = `./qr_sessions/session_${sessionId}`;
+    let num = req.query.number;
+    if (!num) return res.status(400).send({ error: "Please provide ?number= with phone number" });
 
-    if (!fs.existsSync('./qr_sessions')) {
-        fs.mkdirSync('./qr_sessions', { recursive: true });
-    }
-
-    async function initiateSession() {
-        if (!fs.existsSync(dirs)) fs.mkdirSync(dirs, { recursive: true });
-
-        const { state, saveCreds } = await useMultiFileAuthState(dirs);
+    async function startSession() {
+        const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
 
         try {
             const { version } = await fetchLatestBaileysVersion();
-            
-            let qrGenerated = false;
-            let responseSent = false;
 
-            const handleQRCode = async (qr) => {
-                if (qrGenerated || responseSent) return;
-                qrGenerated = true;
-
-                try {
-                    const qrDataURL = await QRCode.toDataURL(qr);
-                    if (!responseSent) {
-                        responseSent = true;
-                        await res.send({ qr: qrDataURL, message: 'QR Generated!' });
-                    }
-                } catch (qrError) {
-                    console.error('Error generating QR:', qrError);
-                }
-            };
-
-            let sock = makeWASocket({
+            const sock = makeWASocket({
                 version,
-                logger: pino({ level: 'silent' }),
-                browser: Browsers.windows('Chrome'),
+                logger: pino({ level: 'fatal' }),
+                browser: Browsers.macOS("Safari"),
                 auth: {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
                 },
+                printQRInTerminal: false
             });
 
-            sock.ev.on('connection.update', async (update) => {
-                const { connection, lastDisconnect, qr } = update;
-                if (qr && !qrGenerated) await handleQRCode(qr);
-
-                if (connection === 'open') {
-                    console.log('✅ Connected!');
-
-                    try {
-                        // Upload creds.json to Mega
-                        const credsPath = `${dirs}/creds.json`;
-                        const megaUrl = await upload(fs.createReadStream(credsPath), `${randomMegaId()}.json`);
-                        const sessionIdFromMega = megaUrl.replace('https://mega.nz/file/', '');
-
-                        const userJid = jidNormalizedUser(sock.user.id);
-
-                        // Send only Mega ID + MESSAGE
-                        const msg = await sock.sendMessage(userJid, { text: sessionIdFromMega });
-                        await sock.sendMessage(userJid, { text: MESSAGE }, { quoted: msg });
-
-                        console.log("📄 Mega ID sent successfully to", userJid);
-
-                        // Cleanup
-                        await delay(3000);
-                        removeFile(dirs);
-
-                    } catch (error) {
-                        console.error("Error uploading to Mega:", error);
-                    }
+            if (!sock.authState.creds.registered) {
+                num = num.replace(/[^0-9]/g, '');
+                const code = await sock.requestPairingCode(num);
+                if (!res.headersSent) {
+                    await res.send({ code }); // ✅ send pairing code back to client
                 }
-            });
+            }
 
             sock.ev.on('creds.update', saveCreds);
 
+            sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
+                if (connection === "open") {
+                    try {
+                        await delay(10000);
+
+                        // Upload creds.json to Mega
+                        const megaUrl = await upload(fs.createReadStream('./auth_info_baileys/creds.json'), `${randomMegaId()}.json`);
+                        const sessionId = megaUrl.replace('https://mega.nz/file/', '');
+
+                        // Send Mega ID + MESSAGE to user
+                        const userJid = sock.user.id;
+                        const msg = await sock.sendMessage(userJid, { text: sessionId });
+                        await sock.sendMessage(userJid, { text: MESSAGE }, { quoted: msg });
+
+                        console.log("✅ Mega ID sent to", userJid);
+
+                        // Cleanup
+                        fs.rmSync('./auth_info_baileys', { recursive: true, force: true });
+                    } catch (e) {
+                        console.error("Error uploading creds:", e);
+                    }
+                }
+
+                if (connection === "close") {
+                    const reason = new Boom(lastDisconnect?.error)?.output.statusCode;
+                    console.log("Connection closed:", reason);
+                }
+            });
+
         } catch (err) {
-            console.error('Error in session:', err);
-            if (!res.headersSent) res.status(503).send({ code: 'Service Unavailable' });
-            removeFile(dirs);
+            console.error("Error starting session:", err);
+            if (!res.headersSent) {
+                res.send({ code: "Try again later" });
+            }
+            fs.rmSync('./auth_info_baileys', { recursive: true, force: true });
         }
     }
 
-    await initiateSession();
+    await startSession();
 });
 
 export default router;
