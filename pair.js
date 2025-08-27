@@ -1,31 +1,16 @@
 import express from 'express';
 import fs from 'fs';
 import pino from 'pino';
-import { 
-    makeWASocket, 
-    useMultiFileAuthState, 
-    makeCacheableSignalKeyStore, 
-    Browsers, 
-    fetchLatestBaileysVersion, 
-    delay 
-} from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
-import { upload } from './mega.js';
+import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, jidNormalizedUser, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { delay } from '@whiskeysockets/baileys';
+import QRCode from 'qrcode';
+import qrcodeTerminal from 'qrcode-terminal';
+import { upload } from './mega.js';   // ✅ use your mega uploader
 
 const router = express.Router();
 
-// Random Mega ID generator
-function randomMegaId(length = 6, numberLength = 4) {
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    const number = Math.floor(Math.random() * Math.pow(10, numberLength));
-    return `${result}${number}`;
-}
-
-const MESSAGE = process.env.MESSAGE || `
+// Custom message to send after Mega upload
+const MESSAGE = `
 *SESSION GENERATED SUCCESSFULY* ✅
 
 *🌟 Join the official channel for more courage, updates, and support!* 🌟
@@ -40,79 +25,208 @@ TikTok: tiktok.com/@septorch
 I will answer your question on the channel 
 https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 
-*SEPTORCH--WHATTSAPP-BOT*
+*SEPTORCH--WHATSAPP-BOT*
 `;
 
-router.get('/', async (req, res) => {
-    let num = req.query.number;
-    if (!num) return res.status(400).send({ error: "Please provide ?number= with phone number" });
+// Function to remove files or directories
+function removeFile(FilePath) {
+    try {
+        if (!fs.existsSync(FilePath)) return false;
+        fs.rmSync(FilePath, { recursive: true, force: true });
+        return true;
+    } catch (e) {
+        console.error('Error removing file:', e);
+        return false;
+    }
+}
 
-    async function startSession() {
-        const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
+router.get('/', async (req, res) => {
+    const sessionId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    const dirs = `./qr_sessions/session_${sessionId}`;
+
+    if (!fs.existsSync('./qr_sessions')) {
+        fs.mkdirSync('./qr_sessions', { recursive: true });
+    }
+
+    async function initiateSession() {
+        if (!fs.existsSync(dirs)) fs.mkdirSync(dirs, { recursive: true });
+
+        const { state, saveCreds } = await useMultiFileAuthState(dirs);
 
         try {
             const { version } = await fetchLatestBaileysVersion();
+            let qrGenerated = false;
+            let responseSent = false;
 
-            const sock = makeWASocket({
+            const handleQRCode = async (qr) => {
+                if (qrGenerated || responseSent) return;
+                qrGenerated = true;
+
+                try {
+                    const qrDataURL = await QRCode.toDataURL(qr, {
+                        errorCorrectionLevel: 'M',
+                        type: 'image/png',
+                        quality: 0.92,
+                        margin: 1,
+                        color: { dark: '#000000', light: '#FFFFFF' }
+                    });
+
+                    if (!responseSent) {
+                        responseSent = true;
+                        await res.send({
+                            qr: qrDataURL,
+                            message: 'QR Code Generated! Scan it with your WhatsApp app.',
+                            instructions: [
+                                '1. Open WhatsApp on your phone',
+                                '2. Go to Settings > Linked Devices',
+                                '3. Tap "Link a Device"',
+                                '4. Scan the QR code above'
+                            ]
+                        });
+                    }
+                } catch (qrError) {
+                    console.error('Error generating QR code:', qrError);
+                    if (!responseSent) {
+                        responseSent = true;
+                        res.status(500).send({ code: 'Failed to generate QR code' });
+                    }
+                }
+            };
+
+            const socketConfig = {
                 version,
-                logger: pino({ level: 'fatal' }),
-                browser: Browsers.macOS("Safari"),
+                logger: pino({ level: 'silent' }),
+                browser: Browsers.windows('Chrome'),
                 auth: {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
                 },
-                printQRInTerminal: false
-            });
+                markOnlineOnConnect: false,
+                generateHighQualityLinkPreview: false,
+                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000,
+                retryRequestDelayMs: 250,
+                maxRetries: 5,
+            };
 
-            if (!sock.authState.creds.registered) {
-                num = num.replace(/[^0-9]/g, '');
-                const code = await sock.requestPairingCode(num);
-                if (!res.headersSent) {
-                    await res.send({ code }); // ✅ send pairing code back to client
+            let sock = makeWASocket(socketConfig);
+            let reconnectAttempts = 0;
+            const maxReconnectAttempts = 3;
+
+            const handleConnectionUpdate = async (update) => {
+                const { connection, lastDisconnect, qr } = update;
+                console.log(`🔄 Connection update: ${connection || 'undefined'}`);
+
+                if (qr && !qrGenerated) {
+                    await handleQRCode(qr);
                 }
-            }
 
-            sock.ev.on('creds.update', saveCreds);
+                if (connection === 'open') {
+                    console.log('✅ Connected successfully!');
+                    console.log('💾 Session saved to:', dirs);
+                    reconnectAttempts = 0;
 
-            sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
-                if (connection === "open") {
                     try {
-                        await delay(10000);
+                        const credsPath = `${dirs}/creds.json`;
 
-                        // Upload creds.json to Mega
-                        const megaUrl = await upload(fs.createReadStream('./auth_info_baileys/creds.json'), `${randomMegaId()}.json`);
-                        const sessionId = megaUrl.replace('https://mega.nz/file/', '');
+                        // ✅ Upload creds.json to Mega
+                        const megaUrl = await upload(fs.createReadStream(credsPath), `session_${Date.now()}.json`);
+                        const fileId = megaUrl.replace('https://mega.nz/file/', '');
 
-                        // Send Mega ID + MESSAGE to user
-                        const userJid = sock.user.id;
-                        const msg = await sock.sendMessage(userJid, { text: sessionId });
-                        await sock.sendMessage(userJid, { text: MESSAGE }, { quoted: msg });
+                        const userJid = sock.authState.creds?.me?.id
+                            ? jidNormalizedUser(sock.authState.creds.me.id)
+                            : null;
 
-                        console.log("✅ Mega ID sent to", userJid);
+                        if (userJid) {
+                            let sent = await sock.sendMessage(userJid, { text: fileId });
+                            await sock.sendMessage(userJid, { text: MESSAGE }, { quoted: sent });
+                            console.log("📤 Mega ID + Message sent to", userJid);
+                        } else {
+                            console.log("❌ Could not determine user JID");
+                        }
+                    } catch (err) {
+                        console.error("❌ Error uploading or sending Mega link:", err);
+                    }
 
-                        // Cleanup
-                        fs.rmSync('./auth_info_baileys', { recursive: true, force: true });
-                    } catch (e) {
-                        console.error("Error uploading creds:", e);
+                    setTimeout(() => {
+                        console.log('🧹 Cleaning up session...');
+                        const deleted = removeFile(dirs);
+                        console.log(deleted ? '✅ Session cleaned up successfully' : '❌ Failed to clean up session folder');
+                    }, 15000);
+                }
+
+                if (connection === 'close') {
+                    console.log('❌ Connection closed');
+                    if (lastDisconnect?.error) {
+                        console.log('❗ Last Disconnect Error:', lastDisconnect.error);
+                    }
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+
+                    if (statusCode === 401) {
+                        console.log('🔐 Logged out - need new QR code');
+                        removeFile(dirs);
+                    } else if (statusCode === 515 || statusCode === 503) {
+                        console.log(`🔄 Stream error (${statusCode}) - attempting to reconnect...`);
+                        reconnectAttempts++;
+                        if (reconnectAttempts <= maxReconnectAttempts) {
+                            setTimeout(() => {
+                                try {
+                                    sock = makeWASocket(socketConfig);
+                                    sock.ev.on('connection.update', handleConnectionUpdate);
+                                    sock.ev.on('creds.update', saveCreds);
+                                } catch (err) {
+                                    console.error('Failed to reconnect:', err);
+                                }
+                            }, 2000);
+                        } else {
+                            if (!responseSent) {
+                                responseSent = true;
+                                res.status(503).send({ code: 'Connection failed after multiple attempts' });
+                            }
+                        }
                     }
                 }
+            };
 
-                if (connection === "close") {
-                    const reason = new Boom(lastDisconnect?.error)?.output.statusCode;
-                    console.log("Connection closed:", reason);
+            sock.ev.on('connection.update', handleConnectionUpdate);
+            sock.ev.on('creds.update', saveCreds);
+
+            setTimeout(() => {
+                if (!responseSent) {
+                    responseSent = true;
+                    res.status(408).send({ code: 'QR generation timeout' });
+                    removeFile(dirs);
                 }
-            });
+            }, 30000);
 
         } catch (err) {
-            console.error("Error starting session:", err);
+            console.error('Error initializing session:', err);
             if (!res.headersSent) {
-                res.send({ code: "Try again later" });
+                res.status(503).send({ code: 'Service Unavailable' });
             }
-            fs.rmSync('./auth_info_baileys', { recursive: true, force: true });
+            removeFile(dirs);
         }
     }
 
-    await startSession();
+    await initiateSession();
+});
+
+process.on('uncaughtException', (err) => {
+    let e = String(err);
+    if (
+        e.includes("conflict") ||
+        e.includes("not-authorized") ||
+        e.includes("Socket connection timeout") ||
+        e.includes("rate-overlimit") ||
+        e.includes("Connection Closed") ||
+        e.includes("Timed Out") ||
+        e.includes("Value not found") ||
+        e.includes("Stream Errored") ||
+        e.includes("statusCode: 515") ||
+        e.includes("statusCode: 503")
+    ) return;
+    console.log('Caught exception: ', err);
 });
 
 export default router;
