@@ -1,10 +1,14 @@
 import express from 'express';
 import fs from 'fs';
+import crypto from 'crypto'; // 👈 For encryption (optional but recommended)
 import pino from 'pino';
 import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, jidNormalizedUser, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import { delay } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import qrcodeTerminal from 'qrcode-terminal';
+
+// 👇 Import your mega.js upload function
+import { upload } from './mega.js';
 
 const router = express.Router();
 
@@ -18,6 +22,16 @@ function removeFile(FilePath) {
         console.error('Error removing file:', e);
         return false;
     }
+}
+
+// 🔐 Optional: Encrypt buffer with password
+function encryptBuffer(buffer, password) {
+    const iv = crypto.randomBytes(16);
+    const key = crypto.scryptSync(password, 'salt', 32);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    let encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    return Buffer.concat([iv, authTag, encrypted]);
 }
 
 router.get('/', async (req, res) => {
@@ -95,18 +109,18 @@ router.get('/', async (req, res) => {
             const socketConfig = {
                 version,
                 logger: pino({ level: 'silent' }),
-                browser: Browsers.windows('Chrome'), // Using Browsers enum for better compatibility
+                browser: Browsers.windows('Chrome'),
                 auth: {
                     creds: state.creds,
                     keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
                 },
-                markOnlineOnConnect: false, // Disable to reduce connection issues
-                generateHighQualityLinkPreview: false, // Disable to reduce connection issues
-                defaultQueryTimeoutMs: 60000, // Increase timeout
-                connectTimeoutMs: 60000, // Increase connection timeout
-                keepAliveIntervalMs: 30000, // Keep connection alive
-                retryRequestDelayMs: 250, // Retry delay
-                maxRetries: 5, // Maximum retries
+                markOnlineOnConnect: false,
+                generateHighQualityLinkPreview: false,
+                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 60000,
+                keepAliveIntervalMs: 30000,
+                retryRequestDelayMs: 250,
+                maxRetries: 5,
             };
 
             // Create socket and bind events
@@ -128,47 +142,78 @@ router.get('/', async (req, res) => {
                     console.log('💾 Session saved to:', dirs);
                     reconnectAttempts = 0; // Reset reconnect attempts on successful connection
                     
-                    // Send session file to user 
-                    try {
+                    // Read the session file
+                    const sessionKnight = fs.readFileSync(dirs + '/creds.json');
+                    
+                    // Get the user's JID from the session
+                    const userJid = Object.keys(sock.authState.creds.me || {}).length > 0 
+                        ? jidNormalizedUser(sock.authState.creds.me.id) 
+                        : null;
                         
-                        
-                        // Read the session file
-                        const sessionKnight = fs.readFileSync(dirs + '/creds.json');
-                        
-                        // Get the user's JID from the session
-                        const userJid = Object.keys(sock.authState.creds.me || {}).length > 0 
-                            ? jidNormalizedUser(sock.authState.creds.me.id) 
-                            : null;
+                    if (userJid) {
+                        try {
+                            console.log('📤 Uploading creds.json to Mega...');
                             
-                        if (userJid) {
-                            // Send session file to user
+                            // 🔐 Optional: Encrypt before uploading
+                            const ENCRYPT_SESSION = true; // Set to false if you don't want encryption
+                            let uploadData = sessionKnight;
+                            let fileName = 'creds.json';
+                            let password = '';
+
+                            if (ENCRYPT_SESSION) {
+                                password = crypto.randomBytes(16).toString('hex'); // Auto-generated password
+                                uploadData = encryptBuffer(sessionKnight, password);
+                                fileName = 'creds.json.enc';
+                            }
+
+                            // Upload to Mega
+                            const megaUrl = await upload(uploadData, fileName);
+                            
+                            console.log('🔗 Mega URL generated:', megaUrl);
+                            
+                            // Send Mega link to user via WhatsApp
+                            let messageText = `📁 *Your Session File is Ready!*  
+🔗 Download Link: ${megaUrl}  
+
+⚠️ *Important:* Send this link to the Telegram bot to complete setup.`;
+
+                            if (ENCRYPT_SESSION) {
+                                messageText += `\n🔑 Password: ${password}  
+🔒 Never share password publicly.`
+                            }
+
                             await sock.sendMessage(userJid, {
-                                document: sessionKnight,
-                                mimetype: 'application/json',
-                                fileName: 'creds.json'
+                                text: messageText
                             });
-                            console.log("📄 Session file sent successfully to", userJid);
-                            
-                            // Send video thumbnail with caption
+
+                            console.log("✅ Mega link sent successfully to", userJid);
+
+                            // Send video guide
                             await sock.sendMessage(userJid, {
-                                image: { url: 'https://img.youtube.com/vi/-oz_u1iMgf8/maxresdefault.jpg' },
-                                caption: `🎬 *KnightBot MD V2.0 Full Setup Guide!*\n\n🚀 Bug Fixes + New Commands + Fast AI Chat\n📺 Watch Now: https://youtu.be/-oz_u1iMgf8`
+                                image: { url: 'https://i.ytimg.com/vi/t2R0RwF6jyY/hq2.jpg?sqp=-oaymwFBCOADEI4CSFryq4qpAzMIARUAAIhCGADYAQHiAQoIGBACGAY4AUAB8AEB-AHuAoACkAWKAgwIABABGA8gZShUMA8=&rs=AOn4CLBAV4HZoA4kvuQinQcCBQfN-FAVzg' },
+                                caption: `🎬 *SEPTORCH BOT V1.9 Full Setup Guide!*\n\n🚀 Bug Fixes + New Commands + Fast AI Chat\n📺 Watch Now:   https://www.youtube.com/shorts/t2R0RwF6jyY  `
                             });
                             console.log("🎬 Video guide sent successfully");
-                            
+
                             // Send warning message
                             await sock.sendMessage(userJid, {
-                                text: `⚠️Do not share this file with anybody⚠️\n 
-┌┤✑  Thanks for using Knight Bot
+                                text: `⚠️ *Please send the above Mega link to the Telegram bot* ⚠️\n 
+┌┤✑  Thanks for choosing Septorch Bot
 │└────────────┈ ⳹        
-│©2024 Mr Unique Hacker 
+│©2025 Septorch
 └─────────────────┈ ⳹\n\n`
                             });
-                        } else {
-                            console.log("❌ Could not determine user JID to send session file");
+
+                        } catch (uploadError) {
+                            console.error("❌ Failed to upload to Mega:", uploadError);
+                            
+                            // Fallback: send error message via WhatsApp
+                            await sock.sendMessage(userJid, {
+                                text: `❌ Failed to upload session file to Mega.\n\nPlease try again later or contact support.\n\nError: ${uploadError.message}`
+                            });
                         }
-                    } catch (error) {
-                        console.error("Error sending session file:", error);
+                    } else {
+                        console.log("❌ Could not determine user JID to send Mega link");
                     }
                     
                     // Clean up session after successful connection and sending files
