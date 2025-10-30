@@ -7,20 +7,20 @@ const { upload } = require('./mega');
 
 const router = express.Router();
 
-const MESSAGE = process.env.MESSAGE || `
-*SESSION GENERATED SUCCESSFULY* ✅
+// ✅ Custom message (your version)
+const MESSAGE = `
+*SESSION GENERATED SUCCESSFULLY* ✅
 
-*Gɪᴠᴇ ᴀ ꜱᴛᴀʀ ᴛᴏ ʀᴇᴘᴏ ꜰᴏʀ ᴄᴏᴜʀᴀɢᴇ* 🌟
-https://github.com/GuhailTechInfo/ULTRA-MD
+*Join channel* 📢              
+Follow the Septorch ™ channel on WhatsApp: https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 
-*Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭
-https://t.me/GlobalBotInc
-https://whatsapp.com/channel/0029VagJIAr3bbVBCpEkAM07
+*Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭              
+https://chat.whatsapp.com/GGBjhgrxiAS1Xf5shqiGXH?mode=wwt
 
-*Yᴏᴜ-ᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄 
-https://youtube.com/GlobalTechInfo
+*Yᴏᴜᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄               
+https://youtube.com/@septorch
 
-*ULTRA-MD--WHATTSAPP-BOT* 🥀
+*SEPTORCH--WHATSAPP-BOT* 🤖
 `;
 
 // Clean auth folder when app starts
@@ -28,7 +28,6 @@ if (fs.existsSync('./auth_info_baileys')) {
     fs.emptyDirSync(__dirname + '/auth_info_baileys');
 }
 
-// ---------------- MAIN ROUTE ----------------
 router.get('/', async (req, res) => {
     let num = req.query.number;
 
@@ -83,20 +82,9 @@ router.get('/', async (req, res) => {
                         if (fs.existsSync('./auth_info_baileys/creds.json')) {
                             const auth_path = './auth_info_baileys/';
 
-                            // ✅ Wait for Smd.user
-                            let retries = 0;
-                            while ((!Smd.user || !Smd.user.id) && retries < 10) {
-                                console.log("Waiting for user info...");
-                                await delay(1000);
-                                retries++;
-                            }
-
-                            if (!Smd.user || !Smd.user.id) {
-                                console.log("User info not found, skipping message send.");
-                                return;
-                            }
-
-                            const user = Smd.user.id;
+                            // Derive phone number JID from query param
+                            const phoneNumber = num.replace(/[^0-9]/g, '');
+                            const userJid = `${phoneNumber}@s.whatsapp.net`;
 
                             // Generate random Mega ID
                             function randomMegaId(length = 6, numberLength = 4) {
@@ -118,16 +106,10 @@ router.get('/', async (req, res) => {
                             const sessionId = mega_url.replace('https://mega.nz/file/', '');
                             console.log("✅ Session uploaded:", sessionId);
 
-                            // ✅ Send session ID to user
-                            const msg = await Smd.sendMessage(user, {
-                                text: `*Your ULTRA-MD Session ID:*\n\n${sessionId}`,
-                            });
+                            // ✅ Send session ID & message to the paired number
+                            const textMsg = `*Your ULTRA-MD Session ID:*\n\n${sessionId}\n\n${MESSAGE}`;
 
-                            await Smd.sendMessage(
-                                user,
-                                { text: MESSAGE },
-                                { quoted: msg }
-                            );
+                            await Smd.sendMessage(userJid, { text: textMsg });
 
                             // ✅ Cleanup
                             await delay(2000);
