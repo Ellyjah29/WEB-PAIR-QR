@@ -10,19 +10,20 @@ const router = express.Router();
 const MESSAGE = process.env.MESSAGE || `
 *SESSION GENERATED SUCCESSFULY* ✅
 
-*Join channel* 📢              
-Follow the Septorch ™ channel on WhatsApp: https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
+*Gɪᴠᴇ ᴀ ꜱᴛᴀʀ ᴛᴏ ʀᴇᴘᴏ ꜰᴏʀ ᴄᴏᴜʀᴀɢᴇ* 🌟
+https://github.com/GuhailTechInfo/ULTRA-MD
 
-*Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭              
-https://chat.whatsapp.com/GGBjhgrxiAS1Xf5shqiGXH?mode=wwt
+*Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭
+https://t.me/GlobalBotInc
+https://whatsapp.com/channel/0029VagJIAr3bbVBCpEkAM07
 
-*Yᴏᴜᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄               
-https://youtube.com/@septorch
+*Yᴏᴜ-ᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄 
+https://youtube.com/GlobalTechInfo
 
-*SEPTORCH--WHATSAPP-BOT* 🤖
+*ULTRA-MD--WHATTSAPP-BOT* 🥀
 `;
 
-// Clean auth folder when the app starts
+// Clean auth folder when app starts
 if (fs.existsSync('./auth_info_baileys')) {
     fs.emptyDirSync(__dirname + '/auth_info_baileys');
 }
@@ -33,7 +34,7 @@ router.get('/', async (req, res) => {
 
     async function SUHAIL() {
         try {
-            // Dynamically import Baileys (fix for ERR_REQUIRE_ESM)
+            // ✅ Dynamically import Baileys (fix for ERR_REQUIRE_ESM)
             const baileys = await import('@whiskeysockets/baileys');
             const {
                 default: makeWASocket,
@@ -48,14 +49,17 @@ router.get('/', async (req, res) => {
             const Smd = makeWASocket({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+                    keys: makeCacheableSignalKeyStore(
+                        state.keys,
+                        pino({ level: "fatal" }).child({ level: "fatal" })
+                    ),
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "fatal" }).child({ level: "fatal" }),
                 browser: Browsers.macOS("Safari"),
             });
 
-            // Send pairing code
+            // ✅ Generate pairing code
             if (!Smd.authState.creds.registered) {
                 await delay(1500);
                 num = num.replace(/[^0-9]/g, '');
@@ -68,18 +72,33 @@ router.get('/', async (req, res) => {
             // Save credentials
             Smd.ev.on('creds.update', saveCreds);
 
-            // Handle connection updates
+            // ✅ Connection updates
             Smd.ev.on("connection.update", async (s) => {
                 const { connection, lastDisconnect } = s;
 
                 if (connection === "open") {
                     try {
                         await delay(10000);
+
                         if (fs.existsSync('./auth_info_baileys/creds.json')) {
                             const auth_path = './auth_info_baileys/';
+
+                            // ✅ Wait for Smd.user
+                            let retries = 0;
+                            while ((!Smd.user || !Smd.user.id) && retries < 10) {
+                                console.log("Waiting for user info...");
+                                await delay(1000);
+                                retries++;
+                            }
+
+                            if (!Smd.user || !Smd.user.id) {
+                                console.log("User info not found, skipping message send.");
+                                return;
+                            }
+
                             const user = Smd.user.id;
 
-                            // Generate random Mega file name
+                            // Generate random Mega ID
                             function randomMegaId(length = 6, numberLength = 4) {
                                 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
                                 let result = '';
@@ -90,26 +109,39 @@ router.get('/', async (req, res) => {
                                 return `${result}${number}`;
                             }
 
-                            // Upload creds to Mega
+                            // ✅ Upload creds to Mega
                             const mega_url = await upload(
                                 fs.createReadStream(auth_path + 'creds.json'),
                                 `${randomMegaId()}.json`
                             );
 
                             const sessionId = mega_url.replace('https://mega.nz/file/', '');
-                            const msg = await Smd.sendMessage(user, { text: sessionId });
-                            await Smd.sendMessage(user, { text: MESSAGE }, { quoted: msg });
-                            await delay(1000);
+                            console.log("✅ Session uploaded:", sessionId);
+
+                            // ✅ Send session ID to user
+                            const msg = await Smd.sendMessage(user, {
+                                text: `*Your ULTRA-MD Session ID:*\n\n${sessionId}`,
+                            });
+
+                            await Smd.sendMessage(
+                                user,
+                                { text: MESSAGE },
+                                { quoted: msg }
+                            );
+
+                            // ✅ Cleanup
+                            await delay(2000);
                             fs.emptyDirSync(__dirname + '/auth_info_baileys');
                         }
                     } catch (err) {
                         console.error("Error during upload or message:", err);
                     }
+
                     await delay(100);
                     fs.emptyDirSync(__dirname + '/auth_info_baileys');
                 }
 
-                // Handle disconnects
+                // ✅ Handle disconnects
                 if (connection === "close") {
                     const reason = new Boom(lastDisconnect?.error)?.output.statusCode;
                     switch (reason) {
