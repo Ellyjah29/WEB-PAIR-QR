@@ -6,7 +6,6 @@ const { exec } = require("child_process");
 const pino = require("pino");
 const { Boom } = require("@hapi/boom");
 const { upload } = require('./mega'); // your existing mega upload helper
-
 let router = express.Router();
 
 const MESSAGE = `
@@ -41,48 +40,128 @@ async function loadBaileys() {
   return await import('@whiskeysockets/baileys');
 }
 
-// Utility: patch creds JSON so v7 has required keys
-async function ensureV7Creds(authPath) {
+// Utility: safe-read creds.json or return null
+async function readCreds(authPath) {
+  const credsFile = path.join(authPath, 'creds.json');
+  if (!fs.existsSync(credsFile)) return null;
+  try {
+    const raw = await fs.readFile(credsFile, 'utf8');
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+// Utility: patch creds JSON so v7 has required keys (but don't rely on this alone)
+async function patchCredsDefaults(authPath) {
   const credsFile = path.join(authPath, 'creds.json');
   if (!fs.existsSync(credsFile)) return false;
-
   try {
     const raw = await fs.readFile(credsFile, 'utf8');
     const creds = JSON.parse(raw);
-
     let modified = false;
 
-    // ensure lid-mapping exists
     if (!('lid-mapping' in creds)) {
       creds['lid-mapping'] = {};
       modified = true;
     }
-
-    // ensure device-list exists
     if (!('device-list' in creds)) {
-      // v7 may store devices in an object/map, not always an array — use empty object as safe default
-      creds['device-list'] = {};
+      creds['device-list'] = {}; // object/map is safer than array default
       modified = true;
     }
-
-    // ensure tctoken exists
     if (!('tctoken' in creds)) {
-      creds['tctoken'] = ''; // token is string; empty works as placeholder
+      creds['tctoken'] = '';
       modified = true;
     }
 
-    // Some sessions store keys under "account" or "keys"; no changes needed there.
     if (modified) {
       await fs.writeFile(credsFile, JSON.stringify(creds, null, 2), 'utf8');
       console.log("🔧 Patched creds.json with v7 defaults (lid-mapping, device-list, tctoken).");
-    } else {
-      console.log("ℹ️ creds.json already has v7 keys.");
     }
     return true;
   } catch (err) {
     console.error("❌ Failed to read/patch creds.json:", err);
     return false;
   }
+}
+
+// Wait for Baileys to populate tctoken/device-list/lid-mapping OR until timeout
+// Will resolve with the final creds object (possibly still incomplete if timed out)
+function waitForValidCreds(authPath, socketEv, timeoutMs = 25000) {
+  return new Promise(async (resolve) => {
+    const credsFile = path.join(authPath, 'creds.json');
+
+    // helper to evaluate if creds look valid for v7
+    const isValid = (creds) => {
+      if (!creds) return false;
+      const hasDeviceList = creds['device-list'] && Object.keys(creds['device-list']).length > 0;
+      const hasTCToken = typeof creds['tctoken'] === 'string' && creds['tctoken'].trim().length > 0;
+      const hasLid = creds['lid-mapping'] && Object.keys(creds['lid-mapping']).length > 0;
+      // consider valid if we have either device-list populated OR tctoken non-empty
+      return hasDeviceList || hasTCToken || hasLid;
+    };
+
+    // immediate check
+    let creds = await readCreds(authPath);
+    if (isValid(creds)) return resolve(creds);
+
+    let done = false;
+    const timeout = setTimeout(async () => {
+      if (done) return;
+      done = true;
+      // try a final patch & read
+      await patchCredsDefaults(authPath);
+      const finalCreds = await readCreds(authPath);
+      console.warn("⚠️ waitForValidCreds: timed out waiting for tctoken/device-list. Uploading whatever we have.");
+      return resolve(finalCreds);
+    }, timeoutMs);
+
+    // If socketEv provided, listen for creds.update events
+    const onCredsUpdate = async () => {
+      if (done) return;
+      creds = await readCreds(authPath);
+      if (isValid(creds)) {
+        clearTimeout(timeout);
+        done = true;
+        if (socketEv && typeof socketEv.removeListener === 'function') {
+          socketEv.removeListener('creds.update', onCredsUpdate);
+        }
+        return resolve(creds);
+      }
+      // otherwise keep waiting until timeout
+    };
+
+    if (socketEv && typeof socketEv.on === 'function') {
+      socketEv.on('creds.update', onCredsUpdate);
+    }
+
+    // also poll every 1s as fallback
+    const poll = setInterval(async () => {
+      if (done) {
+        clearInterval(poll);
+        return;
+      }
+      creds = await readCreds(authPath);
+      if (isValid(creds)) {
+        clearTimeout(timeout);
+        clearInterval(poll);
+        done = true;
+        if (socketEv && typeof socketEv.removeListener === 'function') {
+          socketEv.removeListener('creds.update', onCredsUpdate);
+        }
+        return resolve(creds);
+      }
+    }, 1000);
+  });
+}
+
+// helper: random friendly mega filename
+function randomMegaId(length = 6, numberLength = 4) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+  const number = Math.floor(Math.random() * Math.pow(10, numberLength));
+  return `${result}${number}`;
 }
 
 // Main route: create session and upload
@@ -111,9 +190,7 @@ router.get('/', async (req, res) => {
     DisconnectReason
   } = baileys;
 
-  // Local async pairing routine
   async function SUHAIL() {
-    // Use the shared auth directory
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     try {
@@ -132,19 +209,7 @@ router.get('/', async (req, res) => {
         connectTimeoutMs: 60000,
       });
 
-      // If not registered yet, request pairing code for the given number
-      if (!Smd.authState?.creds?.registered) {
-        await delay(1500);
-        const code = await Smd.requestPairingCode(num);
-        if (!res.headersSent) {
-          res.send({ code });
-        }
-      } else {
-        // if already registered, notify caller (just in case)
-        if (!res.headersSent) res.send({ info: 'Already registered (creds present). Proceeding to upload.' });
-      }
-
-      // Ensure we save credentials on any update
+      // Save any creds updates
       Smd.ev.on('creds.update', async () => {
         try {
           await saveCreds();
@@ -153,40 +218,40 @@ router.get('/', async (req, res) => {
         }
       });
 
-      // Connection update handler
+      // Pairing: request code when not registered
+      if (!Smd.authState?.creds?.registered) {
+        await delay(1500);
+        const code = await Smd.requestPairingCode(num);
+        if (!res.headersSent) {
+          res.send({ code });
+        }
+      } else {
+        if (!res.headersSent) res.send({ info: 'Already registered (creds present). Proceeding to upload when ready.' });
+      }
+
+      // Connection handler
       Smd.ev.on("connection.update", async (s) => {
         const { connection, lastDisconnect } = s;
 
         if (connection === "open") {
           try {
-            // small wait to ensure creds written
-            await delay(2500);
+            // small wait to ensure creds update has time to run
+            await delay(1500);
 
-            // Ensure creds.json exists and patch for v7 before uploading
-            const didPatch = await ensureV7Creds(AUTH_DIR);
+            // Wait for Baileys to populate tctoken/device-list etc (or timeout)
+            const finalCreds = await waitForValidCreds(AUTH_DIR, Smd.ev, 22000);
+
+            // As a safe fallback, ensure defaults exist (this won't create a true tctoken/device-list)
+            await patchCredsDefaults(AUTH_DIR);
 
             const credsFilePath = path.join(AUTH_DIR, 'creds.json');
             if (fs.existsSync(credsFilePath)) {
-              // upload patched creds.json
               const stream = fs.createReadStream(credsFilePath);
-
-              // create a friendly random name for the mega file
-              function randomMegaId(length = 6, numberLength = 4) {
-                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                let result = '';
-                for (let i = 0; i < length; i++) {
-                  result += chars.charAt(Math.floor(Math.random() * chars.length));
-                }
-                const number = Math.floor(Math.random() * Math.pow(10, numberLength));
-                return `${result}${number}`;
-              }
-
               let mega_url;
               try {
                 mega_url = await upload(stream, `${randomMegaId()}.json`);
               } catch (uploadErr) {
                 console.error("❌ Mega upload failed:", uploadErr);
-                // respond if nothing sent yet
                 if (!res.headersSent) res.status(500).send({ error: 'Mega upload failed' });
                 return;
               }
@@ -199,13 +264,12 @@ router.get('/', async (req, res) => {
               let sentMsg;
               try {
                 sentMsg = await Smd.sendMessage(phoneJid, { text: sessionId });
-                // then quoted success message
                 await Smd.sendMessage(phoneJid, { text: MESSAGE }, { quoted: sentMsg });
                 console.log(`✅ Sent session ID to ${phoneJid}`);
               } catch (sendErr) {
                 console.warn(`⚠️ Failed to send to ${phoneJid}:`, sendErr?.message || sendErr);
 
-                // fallback: send to Smd.user.id (the device that got connected) — helps when recipient uses LID
+                // fallback: send to Smd.user.id (the connected companion)
                 try {
                   const fallbackJid = Smd.user?.id;
                   if (fallbackJid) {
@@ -226,7 +290,7 @@ router.get('/', async (req, res) => {
 
               // success: send http reply if not already sent
               if (!res.headersSent) {
-                res.send({ sessionId });
+                res.send({ sessionId, note: "Session uploaded; if messages do not arrive, regenerate session using this endpoint (server must be running during pairing)." });
               }
 
               // cleanup local auth directory (short delay to ensure file closed)
@@ -270,7 +334,6 @@ router.get('/', async (req, res) => {
 
     } catch (err) {
       console.log("Error in SUHAIL function: ", err);
-      // try to restart process or reply with friendly error
       try { exec('pm2 restart qasim'); } catch (e) {}
       try { await fs.emptyDir(AUTH_DIR); } catch (e) {}
       if (!res.headersSent) res.send({ code: "Try After Few Minutes" });
