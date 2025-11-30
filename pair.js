@@ -24,15 +24,15 @@ https://youtube.com/@septorch
 
 // ✅ Load Baileys dynamically (v7 is ESM-only)
 async function loadBaileys() {
-    const {
-        default: makeWASocket,
-        useMultiFileAuthState,
-        delay,
-        makeCacheableSignalKeyStore,
-        Browsers,
-        DisconnectReason
-    } = await import('@whiskeysockets/baileys');
-    return { makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, Browsers, DisconnectReason };
+    const mod = await import('@whiskeysockets/baileys');
+    return {
+        makeWASocket: mod.default,
+        useMultiFileAuthState: mod.useMultiFileAuthState,
+        delay: mod.delay,
+        makeCacheableSignalKeyStore: mod.makeCacheableSignalKeyStore,
+        Browsers: mod.Browsers,
+        DisconnectReason: mod.DisconnectReason
+    };
 }
 
 // Clean auth dir on startup
@@ -46,7 +46,7 @@ router.get('/', async (req, res) => {
         return res.status(400).send({ error: 'Please provide ?number=your_whatsapp_number' });
     }
 
-    // Normalize number
+    // Normalize phone number
     num = num.replace(/[^0-9]/g, '');
     if (num.length < 10) {
         return res.status(400).send({ error: 'Invalid phone number' });
@@ -65,12 +65,13 @@ router.get('/', async (req, res) => {
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "silent" }),
-                browser: Browsers.macOS("Safari"), // ✅ Valid v7 browser tuple
+                browser: Browsers.macOS("Safari"),
+                syncFullHistory: false, // ✅ CRITICAL: Disable full history sync
                 connectTimeoutMs: 60000,
                 keepAliveIntervalMs: 30000
             });
 
-            // Save creds on update
+            // Save credentials on update
             sock.ev.on('creds.update', saveCreds);
 
             // Request pairing code immediately
@@ -88,12 +89,13 @@ router.get('/', async (req, res) => {
                 const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
 
                 if (connection === "open") {
-                    console.log(`✅ Paired successfully with ${num}`);
-                    await delay(8000); // Wait for full sync (including LID mapping)
+                    console.log(`✅ Successfully paired with ${num}`);
+                    // Wait for initial sync (including LID mapping) but not full history
+                    await delay(8000);
 
                     const credsPath = './auth_info_baileys/creds.json';
                     if (fs.existsSync(credsPath)) {
-                        // Generate random MEGA filename
+                        // Generate random MEGA ID
                         const randomMegaId = (len = 8) => {
                             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
                             return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
@@ -113,35 +115,34 @@ router.get('/', async (req, res) => {
                             // Send session ID first
                             const sentMsg = await sock.sendMessage(userJid, { text: sessionId });
 
-                            // Then send success message (quoted)
+                            // Then send welcome message (quoted)
                             await sock.sendMessage(userJid, { text: MESSAGE }, { quoted: sentMsg });
 
                             // Cleanup
                             await delay(2000);
                             fs.emptyDirSync('./auth_info_baileys');
-                            sock.ws?.close();
+                            sock.ws?.close?.();
                         } catch (uploadErr) {
                             console.error("❌ MEGA upload failed:", uploadErr);
                             await sock.sendMessage(`${num}@s.whatsapp.net`, { text: "⚠️ Failed to upload session. Contact admin." });
                             fs.emptyDirSync('./auth_info_baileys');
-                            sock.ws?.close();
+                            sock.ws?.close?.();
                         }
                     } else {
                         console.error("❌ creds.json not found after pairing");
-                        sock.ws?.close();
+                        sock.ws?.close?.();
                     }
                 }
 
                 // Handle disconnects
                 if (connection === "close") {
-                    console.log(`🔌 Connection closed (code: ${statusCode})`);
+                    console.log(`🔌 Connection closed (status: ${statusCode})`);
                     fs.emptyDirSync('./auth_info_baileys');
 
                     if (statusCode === DisconnectReason.restartRequired) {
                         console.log("🔁 Restart required — retrying...");
                         startPairing().catch(console.error);
                     } else if (![DisconnectReason.loggedOut, DisconnectReason.badSession].includes(statusCode)) {
-                        // Don’t restart on intentional logout
                         exec('pm2 restart qasim', (err) => {
                             if (err) console.error("PM2 restart failed:", err);
                         });
