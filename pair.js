@@ -11,159 +11,164 @@ const MESSAGE = `
 *SESSION GENERATED SUCCESSFULLY* ✅
 
 *Join channel* 📢              
-Follow the Septorch ™ channel on WhatsApp: https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04 
+Follow the Septorch ™ channel on WhatsApp: https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
 
 *Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭              
-https://chat.whatsapp.com/GGBjhgrxiAS1Xf5shqiGXH?mode=wwt 
+https://chat.whatsapp.com/GGBjhgrxiAS1Xf5shqiGXH?mode=wwt
 
 *Yᴏᴜᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄               
-https://youtube.com/@septorch 
+https://youtube.com/@septorch
 
 *SEPTORCH--WHATSAPP-BOT* 🤖
 `;
 
-// ✅ Load Baileys dynamically (v7 is ESM-only)
+// ⬇️ Baileys v7 requires dynamic import
 async function loadBaileys() {
-    const mod = await import('@whiskeysockets/baileys');
-    return {
-        makeWASocket: mod.default,
-        useMultiFileAuthState: mod.useMultiFileAuthState,
-        delay: mod.delay,
-        makeCacheableSignalKeyStore: mod.makeCacheableSignalKeyStore,
-        Browsers: mod.Browsers,
-        DisconnectReason: mod.DisconnectReason
-    };
+    return await import('@whiskeysockets/baileys');
 }
 
-// Clean auth dir on startup
+// Clear auth folder on start
 if (fs.existsSync('./auth_info_baileys')) {
-    fs.emptyDirSync('./auth_info_baileys');
+    fs.emptyDirSync(__dirname + '/auth_info_baileys');
 }
 
 router.get('/', async (req, res) => {
     let num = req.query.number;
-    if (!num) {
-        return res.status(400).send({ error: 'Please provide ?number=your_whatsapp_number' });
-    }
+    if (!num) return res.send({ error: 'Please provide ?number=your_whatsapp_number' });
 
-    // Normalize phone number
-    num = num.replace(/[^0-9]/g, '');
-    if (num.length < 10) {
-        return res.status(400).send({ error: 'Invalid phone number' });
-    }
+    const {
+        default: makeWASocket,
+        useMultiFileAuthState,
+        delay,
+        makeCacheableSignalKeyStore,
+        Browsers,
+        DisconnectReason
+    } = await loadBaileys();
 
-    const { makeWASocket, useMultiFileAuthState, delay, makeCacheableSignalKeyStore, Browsers, DisconnectReason } = await loadBaileys();
-
-    async function startPairing() {
+    async function SUHAIL() {
         const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
 
         try {
-            const sock = makeWASocket({
+            const Smd = makeWASocket({
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }))
+                    keys: makeCacheableSignalKeyStore(
+                        state.keys,
+                        pino({ level: "fatal" }).child({ level: "fatal" })
+                    ),
                 },
                 printQRInTerminal: false,
-                logger: pino({ level: "silent" }),
+                logger: pino({ level: "fatal" }).child({ level: "fatal" }),
                 browser: Browsers.macOS("Safari"),
-                syncFullHistory: false, // ✅ CRITICAL: Disable full history sync
-                connectTimeoutMs: 60000,
-                keepAliveIntervalMs: 30000
             });
 
-            // Save credentials on update
-            sock.ev.on('creds.update', saveCreds);
+            if (!Smd.authState.creds.registered) {
+                await delay(1500);
+                num = num.replace(/[^0-9]/g, '');
+                const code = await Smd.requestPairingCode(num);
 
-            // Request pairing code immediately
-            if (!sock.authState.creds.registered) {
-                await delay(1000);
-                const code = await sock.requestPairingCode(num);
                 if (!res.headersSent) {
-                    res.send({ code });
+                    return res.send({ code });
                 }
             }
 
-            // Handle connection events
-            sock.ev.on("connection.update", async (update) => {
-                const { connection, lastDisconnect } = update;
-                const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            Smd.ev.on('creds.update', saveCreds);
+
+            Smd.ev.on("connection.update", async (s) => {
+                const { connection, lastDisconnect } = s;
 
                 if (connection === "open") {
-                    console.log(`✅ Successfully paired with ${num}`);
-                    // Wait for initial sync (including LID mapping) but not full history
-                    await delay(8000);
+                    try {
+                        await delay(8000);
 
-                    const credsPath = './auth_info_baileys/creds.json';
-                    if (fs.existsSync(credsPath)) {
-                        // Generate random MEGA ID
-                        const randomMegaId = (len = 8) => {
-                            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                            return Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
-                        };
+                        if (fs.existsSync('./auth_info_baileys/creds.json')) {
 
-                        try {
-                            // Upload to MEGA
-                            const megaUrl = await upload(
-                                fs.createReadStream(credsPath),
+                            // Resolve JID safely (supports LIDs)
+                            const phoneNumber = num.replace(/[^0-9]/g, '');
+                            let userJid = null;
+
+                            try {
+                                const lookup = await Smd.onWhatsApp(phoneNumber + "@s.whatsapp.net");
+                                userJid = lookup?.[0]?.jid || null;
+                            } catch (err) {
+                                console.log("onWhatsApp failed:", err);
+                            }
+
+                            // Fallback using LID mapping (Baileys v7 feature)
+                            if (!userJid) {
+                                const lidStore = Smd.signalRepository.lidMapping;
+                                userJid = await lidStore.getLIDForPN(phoneNumber + "@s.whatsapp.net");
+                            }
+
+                            if (!userJid) {
+                                console.log("❌ Cannot resolve JID for:", phoneNumber);
+                                return;
+                            }
+
+                            // Generate random Mega file name
+                            function randomMegaId(length = 6, numberLength = 4) {
+                                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                                let result = '';
+                                for (let i = 0; i < length; i++)
+                                    result += chars.charAt(Math.floor(Math.random() * chars.length));
+                                const number = Math.floor(Math.random() * Math.pow(10, numberLength));
+                                return `${result}${number}`;
+                            }
+
+                            const mega_url = await upload(
+                                fs.createReadStream('./auth_info_baileys/creds.json'),
                                 `${randomMegaId()}.json`
                             );
-                            const sessionId = megaUrl.replace('https://mega.nz/file/', '');
 
-                            console.log("📤 Session uploaded to MEGA:", sessionId);
-                            const userJid = `${num}@s.whatsapp.net`;
+                            const sessionId = mega_url.replace('https://mega.nz/file/', '');
+                            console.log("✅ Session ID:", sessionId);
 
-                            // Send session ID first
-                            const sentMsg = await sock.sendMessage(userJid, { text: sessionId });
+                            // Send session ID
+                            const sentMsg = await Smd.sendMessage(userJid, { text: sessionId });
 
-                            // Then send welcome message (quoted)
-                            await sock.sendMessage(userJid, { text: MESSAGE }, { quoted: sentMsg });
+                            // Send full message
+                            await Smd.sendMessage(userJid, { text: MESSAGE }, { quoted: sentMsg });
 
-                            // Cleanup
                             await delay(2000);
-                            fs.emptyDirSync('./auth_info_baileys');
-                            sock.ws?.close?.();
-                        } catch (uploadErr) {
-                            console.error("❌ MEGA upload failed:", uploadErr);
-                            await sock.sendMessage(`${num}@s.whatsapp.net`, { text: "⚠️ Failed to upload session. Contact admin." });
-                            fs.emptyDirSync('./auth_info_baileys');
-                            sock.ws?.close?.();
+                            fs.emptyDirSync(__dirname + '/auth_info_baileys');
                         }
-                    } else {
-                        console.error("❌ creds.json not found after pairing");
-                        sock.ws?.close?.();
+
+                    } catch (e) {
+                        console.log("Upload/send error:", e);
                     }
+
+                    await delay(100);
+                    fs.emptyDirSync(__dirname + '/auth_info_baileys');
                 }
 
-                // Handle disconnects
                 if (connection === "close") {
-                    console.log(`🔌 Connection closed (status: ${statusCode})`);
-                    fs.emptyDirSync('./auth_info_baileys');
+                    let reason = new Boom(lastDisconnect?.error)?.output.statusCode;
 
-                    if (statusCode === DisconnectReason.restartRequired) {
-                        console.log("🔁 Restart required — retrying...");
-                        startPairing().catch(console.error);
-                    } else if (![DisconnectReason.loggedOut, DisconnectReason.badSession].includes(statusCode)) {
-                        exec('pm2 restart qasim', (err) => {
-                            if (err) console.error("PM2 restart failed:", err);
-                        });
-                    }
-
-                    if (!res.headersSent) {
-                        res.status(500).send({ error: "Pairing failed or disconnected" });
+                    if (reason === DisconnectReason.restartRequired) {
+                        console.log("Restart Required. Restarting...");
+                        SUHAIL().catch(err => console.log(err));
+                    } else if (reason === DisconnectReason.timedOut) {
+                        console.log("Connection Timed Out!");
+                    } else if (reason === DisconnectReason.connectionLost) {
+                        console.log("Connection Lost!");
+                    } else if (reason === DisconnectReason.connectionClosed) {
+                        console.log("Connection Closed!");
+                    } else {
+                        console.log("Unexpected Close. Restarting...");
+                        exec('pm2 restart qasim');
                     }
                 }
             });
+
         } catch (err) {
-            console.error("💥 Pairing failed:", err);
-            fs.emptyDirSync('./auth_info_baileys');
-            if (!res.headersSent) {
-                res.status(500).send({ error: "Pairing failed. Try again later." });
-            }
+            console.log("Error in SUHAIL:", err);
             exec('pm2 restart qasim');
+            fs.emptyDirSync(__dirname + '/auth_info_baileys');
+            if (!res.headersSent) res.send({ code: "Try After Few Minutes" });
         }
     }
 
-    await startPairing();
+    await SUHAIL();
 });
 
 module.exports = router;
