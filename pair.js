@@ -22,14 +22,14 @@ https://youtube.com/@septorch
 *SEPTORCH--WHATSAPP-BOT* 🤖
 `;
 
-// ✅ Use dynamic import for Baileys (ESM support)
-async function loadBaileys() {
-    return await import('@whiskeysockets/baileys');
-}
-
-// Ensure the directory is empty on startup
+// Ensure the auth directory is empty on startup
 if (fs.existsSync('./auth_info_baileys')) {
     fs.emptyDirSync(__dirname + '/auth_info_baileys');
+}
+
+// ✅ Dynamic import for Baileys (v7 ESM)
+async function loadBaileys() {
+    return await import('@whiskeysockets/baileys');
 }
 
 router.get('/', async (req, res) => {
@@ -63,9 +63,7 @@ router.get('/', async (req, res) => {
                 await delay(1500);
                 num = num.replace(/[^0-9]/g, '');
                 const code = await Smd.requestPairingCode(num);
-                if (!res.headersSent) {
-                    res.send({ code });
-                }
+                if (!res.headersSent) res.send({ code });
             }
 
             Smd.ev.on('creds.update', saveCreds);
@@ -80,7 +78,25 @@ router.get('/', async (req, res) => {
                         if (fs.existsSync('./auth_info_baileys/creds.json')) {
                             const auth_path = './auth_info_baileys/';
                             const phoneNumber = num.replace(/[^0-9]/g, '');
-                            const userJid = `${phoneNumber}@s.whatsapp.net`;
+                            let userJid = null;
+
+                            // ✅ Resolve user JID properly (supports LIDs)
+                            try {
+                                const lookup = await Smd.onWhatsApp(phoneNumber + "@s.whatsapp.net");
+                                userJid = lookup?.[0]?.jid || null;
+                            } catch (e) {
+                                console.log("onWhatsApp lookup failed:", e);
+                            }
+
+                            if (!userJid) {
+                                const lidStore = Smd.signalRepository.lidMapping;
+                                userJid = await lidStore.getLIDForPN(phoneNumber + "@s.whatsapp.net");
+                            }
+
+                            if (!userJid) {
+                                console.log("❌ Could not resolve JID for:", phoneNumber);
+                                return;
+                            }
 
                             // Generate random Mega ID
                             function randomMegaId(length = 6, numberLength = 4) {
@@ -101,10 +117,10 @@ router.get('/', async (req, res) => {
                             const sessionId = mega_url.replace('https://mega.nz/file/', '');
                             console.log("✅ Session uploaded:", sessionId);
 
-                            // ✅ Send only session ID first
+                            // Send only session ID first
                             const sentMsg = await Smd.sendMessage(userJid, { text: sessionId });
 
-                            // ✅ Then send custom success message (quoted)
+                            // Then send custom success message (quoted)
                             await Smd.sendMessage(userJid, { text: MESSAGE }, { quoted: sentMsg });
 
                             await delay(2000);
