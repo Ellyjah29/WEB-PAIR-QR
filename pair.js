@@ -1,5 +1,7 @@
 const express = require('express');
 const fs = require('fs-extra');
+const path = require('path');
+const archiver = require('archiver');
 const { exec } = require("child_process");
 const pino = require("pino");
 const { Boom } = require("@hapi/boom");
@@ -11,25 +13,41 @@ const MESSAGE = `
 *SESSION GENERATED SUCCESSFULLY* ✅
 
 *Join channel* 📢              
-Follow the Septorch ™ channel on WhatsApp: https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04
+Follow the Septorch ™ channel on WhatsApp: https://whatsapp.com/channel/0029Vb1ydGk8qIzkvps0nZ04 
 
 *Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ ꜰᴏʀ ϙᴜᴇʀʏ* 💭              
-https://chat.whatsapp.com/GGBjhgrxiAS1Xf5shqiGXH?mode=wwt
+https://chat.whatsapp.com/GGBjhgrxiAS1Xf5shqiGXH?mode=wwt 
 
 *Yᴏᴜᴛᴜʙᴇ ᴛᴜᴛᴏʀɪᴀʟꜱ* 🪄               
-https://youtube.com/@septorch
+https://youtube.com/@septorch 
 
 *SEPTORCH--WHATSAPP-BOT* 🤖
 `;
 
-// ✅ Use dynamic import for Baileys (ESM support)
-async function loadBaileys() {
-    return await import('@whiskeysockets/baileys');
+// Helper: Zip folder to buffer
+function zipFolder(folderPath) {
+    return new Promise((resolve, reject) => {
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        const buffers = [];
+
+        archive.on('data', (data) => buffers.push(data));
+        archive.on('end', () => resolve(Buffer.concat(buffers)));
+        archive.on('error', reject);
+
+        archive.directory(folderPath, false);
+        archive.finalize();
+    });
 }
 
-// Ensure the directory is empty on startup
-if (fs.existsSync('./auth_info_baileys')) {
-    fs.emptyDirSync(__dirname + '/auth_info_baileys');
+// Ensure session dir is clean on startup
+const SESSION_DIR = path.join(__dirname, 'auth_info_baileys');
+if (fs.existsSync(SESSION_DIR)) {
+    fs.emptyDirSync(SESSION_DIR);
+}
+
+// Dynamically import Baileys (ESM)
+async function loadBaileys() {
+    return await import('@whiskeysockets/baileys');
 }
 
 router.get('/', async (req, res) => {
@@ -46,7 +64,7 @@ router.get('/', async (req, res) => {
     } = await loadBaileys();
 
     async function SUHAIL() {
-        const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
+        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
         try {
             const Smd = makeWASocket({
@@ -77,12 +95,11 @@ router.get('/', async (req, res) => {
                     try {
                         await delay(10000);
 
-                        if (fs.existsSync('./auth_info_baileys/creds.json')) {
-                            const auth_path = './auth_info_baileys/';
+                        if (fs.existsSync(path.join(SESSION_DIR, 'creds.json'))) {
                             const phoneNumber = num.replace(/[^0-9]/g, '');
                             const userJid = `${phoneNumber}@s.whatsapp.net`;
 
-                            // Generate random Mega ID
+                            // Generate random Mega filename
                             function randomMegaId(length = 6, numberLength = 4) {
                                 const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
                                 let result = '';
@@ -93,32 +110,35 @@ router.get('/', async (req, res) => {
                                 return `${result}${number}`;
                             }
 
-                            // Upload credentials to Mega
-                            const mega_url = await upload(
-                                fs.createReadStream(auth_path + 'creds.json'),
-                                `${randomMegaId()}.json`
-                            );
-                            const sessionId = mega_url.replace('https://mega.nz/file/', '');
-                            console.log("✅ Session uploaded:", sessionId);
+                            // Zip and upload
+                            const zipBuffer = await zipFolder(SESSION_DIR);
+                            const zipStream = require('stream').Readable.from(zipBuffer);
+                            const mega_url = await upload(zipStream, `${randomMegaId()}.zip`);
 
-                            // ✅ Send only session ID first
-                            const sentMsg = await Smd.sendMessage(userJid, { text: sessionId });
+                            console.log("✅ Session ZIP uploaded:", mega_url);
 
-                            // ✅ Then send custom success message (quoted)
+                            // ✂️ Extract only the file ID (e.g., SBQlFR6J#...)
+                            const megaId = mega_url.replace(/^https:\/\/mega\.nz\/file\//, '');
+
+                            // Send ID first
+                            const sentMsg = await Smd.sendMessage(userJid, { text: megaId });
+
+                            // Then send success message quoted
                             await Smd.sendMessage(userJid, { text: MESSAGE }, { quoted: sentMsg });
 
                             await delay(2000);
-                            fs.emptyDirSync(__dirname + '/auth_info_baileys');
                         }
                     } catch (e) {
-                        console.log("Error during file upload or message send: ", e);
+                        console.error("Error during session upload or message send:", e);
+                    } finally {
+                        // Always clean up
+                        if (fs.existsSync(SESSION_DIR)) {
+                            fs.emptyDirSync(SESSION_DIR);
+                        }
                     }
-
-                    await delay(100);
-                    fs.emptyDirSync(__dirname + '/auth_info_baileys');
                 }
 
-                // Handle connection closures
+                // Handle connection close
                 if (connection === "close") {
                     let reason = new Boom(lastDisconnect?.error)?.output.statusCode;
                     if (reason === DisconnectReason.connectionClosed) {
@@ -127,21 +147,24 @@ router.get('/', async (req, res) => {
                         console.log("Connection Lost from Server!");
                     } else if (reason === DisconnectReason.restartRequired) {
                         console.log("Restart Required, Restarting...");
-                        SUHAIL().catch(err => console.log(err));
+                        SUHAIL().catch(console.error);
                     } else if (reason === DisconnectReason.timedOut) {
                         console.log("Connection TimedOut!");
                     } else {
-                        console.log('Connection closed with bot. Restarting...');
+                        console.log('Unexpected disconnect. Restarting...');
                         exec('pm2 restart qasim');
                     }
                 }
             });
-
         } catch (err) {
-            console.log("Error in SUHAIL function: ", err);
+            console.error("Error in SUHAIL function:", err);
             exec('pm2 restart qasim');
-            fs.emptyDirSync(__dirname + '/auth_info_baileys');
-            if (!res.headersSent) res.send({ code: "Try After Few Minutes" });
+            if (fs.existsSync(SESSION_DIR)) {
+                fs.emptyDirSync(SESSION_DIR);
+            }
+            if (!res.headersSent) {
+                res.send({ code: "Try After Few Minutes" });
+            }
         }
     }
 
