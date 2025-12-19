@@ -82,7 +82,7 @@ router.get('/', async (req, res) => {
                 printQRInTerminal: false,
                 logger: pino({ level: "fatal" }),
                 // ✅ Valid browser tuple (Android-like, but using supported format)
-                browser: ['SEPTORCH', 'Chrome', '120.0.0'],
+                browser: ['Android', 'Chrome', '120.0.0'],
                 msgRetryCounterCache,
                 // ✅ Required in v7
                 getMessage: async () => ({}),
@@ -203,3 +203,4 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+
